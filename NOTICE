@@ -1,0 +1,21 @@
+# NOTICE
+
+P2PDesk is a fork of RustDesk, modified by Hexrotor.
+
+- RustDesk, Copyright (c) Purslane Tech Pte. Ltd., licensed under the GNU
+  Affero General Public License v3.0 (AGPL-3.0) — see the LICENCE file for
+  the full text.
+- P2PDesk modifications, Copyright (c) 2026 Hexrotor, licensed under
+  AGPL-3.0.
+
+The network module (p2pdesk-net/) builds on go-libp2p, Copyright (c) 2014
+Juan Benet and the go-libp2p contributors, dual-licensed under MIT and
+Apache-2.0. Its patched go-libp2p-kad-dht copy keeps the upstream MIT license
+(p2pdesk-net/third_party/go-libp2p-kad-dht/LICENSE).
+
+libs/hwcodec is vendored from https://github.com/rustdesk-org/hwcodec at
+commit 778df1f9 (version 0.7.1). Upstream publishes no license file; the code
+is redistributed here unmodified except for the patches documented in
+libs/hwcodec/P2PDESK-PATCHES.md.
+
+Other vendored components keep their own license files (e.g. libs/enigo).

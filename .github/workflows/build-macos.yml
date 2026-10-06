@@ -1,0 +1,76 @@
+name: macOS build
+
+# Produces the unsigned arm64 DMG. Signing and notarization need an Apple
+# Developer account; until then the artifact is meant for local testing and
+# Gatekeeper will warn on first open.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    name: macOS arm64 image (unsigned)
+    runs-on: macos-14
+    env:
+      # vcpkg binary caching through the Actions cache, so only the first run
+      # compiles the native dependencies.
+      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+      VCPKG_DEFAULT_TRIPLET: arm64-osx
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # libs/hwcodec/externals carries the vendor SDKs.
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: p2pdesk-net/go.mod
+          cache-dependency-path: p2pdesk-net/go.sum
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned in README.md; the macOS runner is arm64.
+          flutter-version: 3.24.5
+          channel: stable
+          cache: true
+
+      - name: Set up vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Install native dependencies
+        # Classic mode: libs/scrap/build.rs resolves the libraries under
+        # $VCPKG_ROOT/installed/<triplet>.
+        run: |
+          "$VCPKG_ROOT/vcpkg" install \
+            aom libjpeg-turbo libvpx libyuv opus ffmpeg \
+            --triplet arm64-osx --classic --overlay-ports=res/vcpkg
+
+      - name: Install create-dmg and flutter_rust_bridge_codegen
+        run: |
+          brew install create-dmg
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+
+      - name: Generate the flutter_rust_bridge bindings
+        run: |
+          ~/.cargo/bin/flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart \
+            --c-output ./flutter/macos/Runner/bridge_generated.h
+
+      - name: Build the DMG
+        run: bash scripts/package_macos_arm64.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p2pdesk-macos-arm64
+          path: dist/macos-arm64/
+          if-no-files-found: error

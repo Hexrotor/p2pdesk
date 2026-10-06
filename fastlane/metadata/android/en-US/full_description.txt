@@ -1,0 +1,16 @@
+P2PDesk is a serverless remote desktop controller: it finds the desktop you
+want to control by its peer id on a public DHT and connects directly. No
+account, no self-hosted rendezvous server, and session data does not traverse a
+relay.
+
+It is a fork of RustDesk 1.4.9 (AGPL-3.0) where the hbbs/hbbr servers are
+replaced by a go-libp2p module. The connection password remains the security
+baseline: peer ids on a public DHT are discoverable on purpose, the password is
+what gates control.
+
+Android builds are controller-side only; the desktop end must run the P2PDesk
+target. Source code, build instructions and known limitations are in the
+project repository.
+
+License: AGPL-3.0, inherited from RustDesk; the original copyright notices
+remain in the source.

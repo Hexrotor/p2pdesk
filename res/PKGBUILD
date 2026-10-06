@@ -1,0 +1,35 @@
+pkgname=p2pdesk
+pkgver=1.4.9
+pkgrel=0
+epoch=
+pkgdesc="Serverless peer-to-peer remote desktop (RustDesk fork)"
+arch=('x86_64')
+url="https://github.com/Hexrotor/p2pdesk"
+license=('AGPL-3.0-only')
+groups=()
+depends=('gtk3' 'xdotool' 'libxcb' 'libxfixes' 'alsa-lib' 'libva' 'libappindicator-gtk3' 'pam' 'gst-plugins-base' 'gst-plugin-pipewire')
+makedepends=()
+checkdepends=()
+optdepends=()
+provides=()
+conflicts=()
+replaces=()
+backup=()
+options=()
+install=pacman_install
+changelog=
+noextract=()
+md5sums=() #generate with 'makepkg -g'
+
+package() {
+  if [[ ${FLUTTER} ]]; then
+	  mkdir -p "${pkgdir}/usr/share/p2pdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "${pkgdir}/usr/share/p2pdesk"
+  fi
+  mkdir -p "${pkgdir}/usr/bin"
+  pushd ${pkgdir} && ln -s /usr/share/p2pdesk/p2pdesk usr/bin/p2pdesk && popd
+  install -Dm 644 $HBB/res/p2pdesk.service -t "${pkgdir}/usr/share/p2pdesk/files"
+  install -Dm 644 $HBB/res/p2pdesk.desktop -t "${pkgdir}/usr/share/p2pdesk/files"
+  install -Dm 644 $HBB/res/p2pdesk-link.desktop -t "${pkgdir}/usr/share/p2pdesk/files"
+  install -Dm 644 $HBB/res/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/p2pdesk.png"
+  install -Dm 644 $HBB/res/scalable.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/p2pdesk.svg"
+}

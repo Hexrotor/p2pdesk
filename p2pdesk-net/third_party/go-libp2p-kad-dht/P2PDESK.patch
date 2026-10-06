@@ -1,0 +1,590 @@
+--- a/dht.go
++++ b/dht.go
+@@ -397,6 +397,9 @@
+ 	}
+ 
+ 	queryFnc := func(ctx context.Context, key string) error {
++		if cfg.RoutingTable.RefreshWithoutFollowup {
++			return dht.refreshLookup(ctx, key)
++		}
+ 		_, err := dht.GetClosestPeers(ctx, key)
+ 		return err
+ 	}
+@@ -410,7 +413,7 @@
+ 		cfg.RoutingTable.RefreshQueryTimeout,
+ 		cfg.RoutingTable.RefreshInterval,
+ 		maxLastSuccessfulOutboundThreshold,
+-		dht.refreshFinishedCh)
++		dht.refreshFinishedCh, cfg.RoutingTable.CheckConcurrency)
+ 
+ 	return r, err
+ }
+--- a/dht_options.go
++++ b/dht_options.go
+@@ -3,6 +3,7 @@
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
+ 	"testing"
+ 	"time"
+ 
+@@ -208,6 +209,30 @@
+ 	}
+ }
+ 
++// RoutingTableCheckConcurrency bounds stale-peer liveness checks, including
++// their connection attempts. Waiting for a worker does not consume the peer's
++// network timeout. Zero (the default) preserves upstream's unbounded behavior.
++func RoutingTableCheckConcurrency(n int) Option {
++	return func(c *dhtcfg.Config) error {
++		if n < 1 {
++			return fmt.Errorf("routing table check concurrency must be positive")
++		}
++		c.RoutingTable.CheckConcurrency = n
++		return nil
++	}
++}
++
++// RoutingTableRefreshWithoutFollowup ends background bucket lookups at normal
++// alpha/beta convergence. The additional top-K followup used by GetClosestPeers
++// to prepare publication connections is unnecessary for routing maintenance.
++// Public routing API calls, including FindPeer/Provide, are unchanged.
++func RoutingTableRefreshWithoutFollowup() Option {
++	return func(c *dhtcfg.Config) error {
++		c.RoutingTable.RefreshWithoutFollowup = true
++		return nil
++	}
++}
++
+ // LookupCheckConcurrency configures maximal number of go routines that can be used to
+ // perform a lookup check operation, before adding a new node to the routing table.
+ func LookupCheckConcurrency(n int) Option {
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -56,13 +56,15 @@
+ 	MsgSenderBuilder       func(h host.Host, protos []protocol.ID) pb.MessageSenderWithDisconnect
+ 
+ 	RoutingTable struct {
+-		RefreshQueryTimeout time.Duration
+-		RefreshInterval     time.Duration
+-		AutoRefresh         bool
+-		LatencyTolerance    time.Duration
+-		CheckInterval       time.Duration
+-		PeerFilter          RouteTableFilterFunc
+-		DiversityFilter     peerdiversity.PeerIPGroupFilter
++		RefreshQueryTimeout    time.Duration
++		RefreshInterval        time.Duration
++		AutoRefresh            bool
++		LatencyTolerance       time.Duration
++		CheckInterval          time.Duration
++		CheckConcurrency       int
++		RefreshWithoutFollowup bool
++		PeerFilter             RouteTableFilterFunc
++		DiversityFilter        peerdiversity.PeerIPGroupFilter
+ 	}
+ 
+ 	BootstrapPeers func() []peer.AddrInfo
+--- a/internal/net/message_manager.go
++++ b/internal/net/message_manager.go
+@@ -5,7 +5,9 @@
+ 	"context"
+ 	"errors"
+ 	"io"
++	"strconv"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/libp2p/go-libp2p/core/host"
+@@ -29,6 +31,18 @@
+ var ErrReadTimeout = errors.New("timed out reading response")
+ 
+ var logger = logging.Logger("dht")
++
++var requestProtectionID atomic.Uint64
++
++// Protect only in-flight RPCs, not their cached idle streams. This lets an
++// endpoint promptly collect DHT connections after work finishes without
++// aborting a response in progress. Unique tags cover concurrent callers.
++func (m *messageSenderImpl) protectRequest(p peer.ID) func() {
++	tag := "dht-request-" + strconv.FormatUint(requestProtectionID.Add(1), 10)
++	cm := m.host.ConnManager()
++	cm.Protect(p, tag)
++	return func() { cm.Unprotect(p, tag) }
++}
+ 
+ // messageSenderImpl is responsible for sending requests and messages to peers efficiently, including reuse of streams.
+ // It also tracks metrics for sent requests and messages.
+@@ -69,6 +83,8 @@
+ // SendRequest sends out a request, but also makes sure to
+ // measure the RTT for latency measurements.
+ func (m *messageSenderImpl) SendRequest(ctx context.Context, p peer.ID, pmes *pb.Message) (*pb.Message, error) {
++	unprotect := m.protectRequest(p)
++	defer unprotect()
+ 	ctx = metrics.ContextWithAttributes(ctx, metrics.UpsertMessageType(pmes))
+ 
+ 	ms, err := m.messageSenderForPeer(ctx, p)
+@@ -101,6 +117,8 @@
+ 
+ // SendMessage sends out a message
+ func (m *messageSenderImpl) SendMessage(ctx context.Context, p peer.ID, pmes *pb.Message) error {
++	unprotect := m.protectRequest(p)
++	defer unprotect()
+ 	ctx = metrics.ContextWithAttributes(ctx, metrics.UpsertMessageType(pmes))
+ 
+ 	ms, err := m.messageSenderForPeer(ctx, p)
+--- a/lookup.go
++++ b/lookup.go
+@@ -58,6 +58,24 @@
+ 	return lookupRes.peers, nil
+ }
+ 
++// refreshLookup is only used for endpoint background maintenance. Keep the
++// standard convergence rule and in-query peer/RT updates, without establishing
++// all top-K publication connections after the lookup has already converged.
++func (dht *IpfsDHT) refreshLookup(ctx context.Context, key string) error {
++	res, _, err := dht.runQuery(ctx, key, dht.pmGetClosestPeers(key), func(*qpeerset.QueryPeerset) bool { return false }, true)
++	if err != nil {
++		return err
++	}
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	if !res.completed || len(res.peers) == 0 {
++		return ErrNoPeersQueried
++	}
++	dht.routingTable.ResetCplRefreshedAtForID(kb.ConvertKey(key), time.Now())
++	return nil
++}
++
+ // pmGetClosestPeers is the protocol messenger version of the GetClosestPeer queryFn.
+ func (dht *IpfsDHT) pmGetClosestPeers(key string) queryFn {
+ 	return func(ctx context.Context, p peer.ID) ([]*peer.AddrInfo, error) {
+--- a/query.go
++++ b/query.go
+@@ -79,6 +79,9 @@
+ 
+ 	// stopFn is used to determine if we should stop the WHOLE disjoint query.
+ 	stopFn stopFn
++	// Background maintenance can stop outstanding RPCs once convergence is
++	// reached. Public queries retain their original completion semantics.
++	cancelOutstanding bool
+ }
+ 
+ type lookupWithFollowupResult struct {
+@@ -170,7 +173,7 @@
+ 	return lookupRes, nil
+ }
+ 
+-func (dht *IpfsDHT) runQuery(ctx context.Context, target string, queryFn queryFn, stopFn stopFn) (*lookupWithFollowupResult, *qpeerset.QueryPeerset, error) {
++func (dht *IpfsDHT) runQuery(ctx context.Context, target string, queryFn queryFn, stopFn stopFn, cancelOutstanding ...bool) (*lookupWithFollowupResult, *qpeerset.QueryPeerset, error) {
+ 	ctx, span := internal.StartSpan(ctx, "IpfsDHT.RunQuery")
+ 	defer span.End()
+ 
+@@ -205,6 +208,7 @@
+ 		terminated:         false,
+ 		queryFn:            queryFn,
+ 		stopFn:             stopFn,
++		cancelOutstanding:  len(cancelOutstanding) > 0 && cancelOutstanding[0],
+ 	}
+ 
+ 	// run the query
+@@ -418,11 +422,19 @@
+ // queryPeer does not access the query state in queryPeers!
+ func (q *query) queryPeer(ctx context.Context, ch chan<- *queryUpdate, p peer.ID) {
+ 	defer q.waitGroup.Done()
++	// Include connection/identify setup in the active-work protection.
++	// A query has at most one worker per peer, and its UUID separates callers.
++	protectTag := "dht-query-" + q.id.String()
++	q.dht.host.ConnManager().Protect(p, protectTag)
++	defer q.dht.host.ConnManager().Unprotect(p, protectTag)
+ 
+ 	ctx, span := internal.StartSpan(ctx, "IpfsDHT.QueryPeer")
+ 	defer span.End()
+ 
+ 	dialCtx, queryCtx := ctx, q.ctx
++	if q.cancelOutstanding {
++		queryCtx = ctx
++	}
+ 
+ 	// dial the peer
+ 	if err := q.dht.dialPeer(dialCtx, p); err != nil {
+--- a/refresh_lookup_test.go
++++ b/refresh_lookup_test.go
+@@ -0,0 +1,89 @@
++package dht
++
++import (
++	"context"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	dhtnet "github.com/libp2p/go-libp2p-kad-dht/internal/net"
++	pb "github.com/libp2p/go-libp2p-kad-dht/pb"
++	"github.com/libp2p/go-libp2p-kad-dht/qpeerset"
++	kb "github.com/libp2p/go-libp2p-kbucket"
++	"github.com/libp2p/go-libp2p/core/host"
++	"github.com/libp2p/go-libp2p/core/peer"
++	"github.com/libp2p/go-libp2p/core/protocol"
++	"github.com/stretchr/testify/require"
++)
++
++type refreshCountingSender struct {
++	pb.MessageSenderWithDisconnect
++	calls *atomic.Int32
++}
++
++const refreshTestKey = "p2pdesk-maintenance-convergence-test"
++
++func (m refreshCountingSender) SendRequest(ctx context.Context, p peer.ID, req *pb.Message) (*pb.Message, error) {
++	if string(req.GetKey()) == refreshTestKey {
++		m.calls.Add(1)
++	}
++	return m.MessageSenderWithDisconnect.SendRequest(ctx, p, req)
++}
++
++func TestRefreshLookupConvergesWithoutPublicationFollowup(t *testing.T) {
++	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
++	defer cancel()
++	var calls atomic.Int32
++	root := setupDHT(ctx, t, false, BucketSize(3), Concurrency(1), Resiliency(1), disableFixLowPeersRoutine(t),
++		RoutingTableRefreshWithoutFollowup(), RoutingTableCheckConcurrency(2),
++		WithCustomMessageSender(func(h host.Host, protos []protocol.ID) pb.MessageSenderWithDisconnect {
++			return refreshCountingSender{dhtnet.NewMessageSenderImpl(h, protos), &calls}
++		}))
++	for i := 0; i < 3; i++ {
++		remote := setupDHT(ctx, t, false, BucketSize(3), disableFixLowPeersRoutine(t))
++		connect(t, ctx, root, remote)
++	}
++	// With alpha=beta=1, the nearest seed responds and convergence is met.
++	// The other two seeds are needed only by the public API's followup.
++	calls.Store(0)
++	require.NoError(t, root.refreshLookup(ctx, refreshTestKey))
++	maintenanceCalls := calls.Load()
++	require.EqualValues(t, 1, maintenanceCalls)
++	calls.Store(0)
++	peers, err := root.GetClosestPeers(ctx, refreshTestKey)
++	require.NoError(t, err)
++	require.Len(t, peers, 3)
++	require.EqualValues(t, 3, calls.Load(), "public GetClosestPeers must retain all top-K followups")
++	// Two otherwise healthy peers stall. Once the closest responds, an
++	// endpoint maintenance lookup must cancel these surplus requests rather
++	// than wait for the entire refresh-query timeout on every bucket.
++	root.alpha = 3
++	closest := root.routingTable.NearestPeers(kb.ConvertKey(refreshTestKey), 1)[0]
++	slowStarted := make(chan struct{}, 2)
++	queryCtx, queryCancel := context.WithTimeout(ctx, 2*time.Second)
++	defer queryCancel()
++	started := time.Now()
++	res, _, err := root.runQuery(queryCtx, refreshTestKey, func(c context.Context, p peer.ID) ([]*peer.AddrInfo, error) {
++		if p == closest {
++			for i := 0; i < 2; i++ {
++				select {
++				case <-slowStarted:
++				case <-c.Done():
++					return nil, c.Err()
++				}
++			}
++			return nil, nil
++		}
++		slowStarted <- struct{}{}
++		<-c.Done()
++		return nil, c.Err()
++	}, func(*qpeerset.QueryPeerset) bool { return false }, true)
++	require.NoError(t, err)
++	require.NoError(t, queryCtx.Err())
++	require.True(t, res.completed)
++	require.Less(t, time.Since(started), time.Second)
++	require.Equal(t, 3, root.routingTable.Size(), "cancelled surplus requests must not evict healthy peers")
++	cancelled, stop := context.WithCancel(ctx)
++	stop()
++	require.Error(t, root.refreshLookup(cancelled, refreshTestKey))
++}
+--- a/rtrefresh/bounded_check_test.go
++++ b/rtrefresh/bounded_check_test.go
+@@ -0,0 +1,103 @@
++package rtrefresh
++
++import (
++	"context"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	kb "github.com/libp2p/go-libp2p-kbucket"
++	"github.com/libp2p/go-libp2p/core/connmgr"
++	"github.com/libp2p/go-libp2p/core/host"
++	"github.com/libp2p/go-libp2p/core/peer"
++	"github.com/libp2p/go-libp2p/core/test"
++	pstore "github.com/libp2p/go-libp2p/p2p/host/peerstore"
++	"github.com/stretchr/testify/require"
++)
++
++type checkHost struct {
++	host.Host
++	connect func(context.Context, peer.AddrInfo) error
++}
++
++func (h checkHost) Connect(ctx context.Context, p peer.AddrInfo) error { return h.connect(ctx, p) }
++func (h checkHost) ConnManager() connmgr.ConnManager                   { return &connmgr.NullConnMgr{} }
++
++func staleTable(t *testing.T, count int) *kb.RoutingTable {
++	t.Helper()
++	rt, err := kb.NewRoutingTable(128, kb.ConvertPeerID(test.RandPeerIDFatal(t)), time.Hour, pstore.NewMetrics(), 100*time.Hour, nil)
++	require.NoError(t, err)
++	t.Cleanup(func() { require.NoError(t, rt.Close()) })
++	for i := 0; i < count; i++ {
++		p := test.RandPeerIDFatal(t)
++		added, err := rt.TryAddPeer(p, true, false)
++		require.NoError(t, err)
++		require.True(t, added)
++		rt.UpdateLastSuccessfulOutboundQueryAt(p, time.Now().Add(-24*time.Hour))
++	}
++	return rt
++}
++
++func TestLivenessQueueDoesNotConsumePeerTimeout(t *testing.T) {
++	rt := staleTable(t, 15)
++	var active, peak, completed atomic.Int32
++	var shortDeadline atomic.Bool
++	h := checkHost{connect: func(ctx context.Context, _ peer.AddrInfo) error {
++		n := active.Add(1)
++		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
++		}
++		deadline, ok := ctx.Deadline()
++		if !ok || time.Until(deadline) < 9*time.Second {
++			shortDeadline.Store(true)
++		}
++		return nil
++	}}
++	r := &RtRefreshManager{rt: rt, h: h, peerCheckConcurrency: 3, successfulOutboundQueryGracePeriod: time.Hour,
++		refreshPingFnc: func(ctx context.Context, _ peer.ID) error {
++			defer active.Add(-1)
++			// The fifth batch waits >10s. Queued peers still get a fresh
++			// 10s deadline when admitted; a global timeout would evict them.
++			select {
++			case <-time.After(2700 * time.Millisecond):
++				completed.Add(1)
++				return nil
++			case <-ctx.Done():
++				return ctx.Err()
++			}
++		},
++	}
++	r.pingAndEvictPeers(t.Context())
++	require.EqualValues(t, 3, peak.Load())
++	require.EqualValues(t, 15, completed.Load())
++	require.False(t, shortDeadline.Load())
++	require.Equal(t, 15, rt.Size())
++}
++
++func TestLivenessCancellationKeepsQueuedAndActivePeers(t *testing.T) {
++	rt := staleTable(t, 12)
++	ctx, cancel := context.WithCancel(t.Context())
++	defer cancel()
++	started := make(chan struct{}, 3)
++	h := checkHost{connect: func(ctx context.Context, _ peer.AddrInfo) error {
++		select {
++		case started <- struct{}{}:
++		case <-ctx.Done():
++			return ctx.Err()
++		}
++		<-ctx.Done()
++		return ctx.Err()
++	}}
++	r := &RtRefreshManager{rt: rt, h: h, peerCheckConcurrency: 3, successfulOutboundQueryGracePeriod: time.Hour}
++	done := make(chan struct{})
++	go func() { r.pingAndEvictPeers(ctx); close(done) }()
++	for i := 0; i < 3; i++ {
++		<-started
++	}
++	cancel()
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("cancel did not stop queued checks")
++	}
++	require.Equal(t, 12, rt.Size())
++}
+--- a/rtrefresh/rt_refresh_manager.go
++++ b/rtrefresh/rt_refresh_manager.go
+@@ -8,11 +8,11 @@
+ 	"sync/atomic"
+ 	"time"
+ 
+-	logging "github.com/ipfs/go-log/v2"
+ 	"github.com/libp2p/go-libp2p-kad-dht/internal"
+ 	kbucket "github.com/libp2p/go-libp2p-kbucket"
+ 	"github.com/libp2p/go-libp2p/core/host"
+ 	"github.com/libp2p/go-libp2p/core/peer"
++	logging "github.com/libp2p/go-libp2p/gologshim"
+ 	"github.com/multiformats/go-base32"
+ 	"go.opentelemetry.io/otel/attribute"
+ 	"go.opentelemetry.io/otel/codes"
+@@ -54,7 +54,8 @@
+ 
+ 	triggerRefresh chan *triggerRefreshReq // channel to write refresh requests to.
+ 
+-	refreshDoneCh chan struct{} // write to this channel after every refresh
++	refreshDoneCh        chan struct{} // write to this channel after every refresh
++	peerCheckConcurrency int
+ }
+ 
+ func NewRtRefreshManager(ctx context.Context, h host.Host, rt *kbucket.RoutingTable, autoRefresh bool,
+@@ -65,7 +66,15 @@
+ 	refreshInterval time.Duration,
+ 	successfulOutboundQueryGracePeriod time.Duration,
+ 	refreshDoneCh chan struct{},
++	peerCheckConcurrency ...int,
+ ) (*RtRefreshManager, error) {
++	concurrency := 0
++	if len(peerCheckConcurrency) > 0 {
++		concurrency = peerCheckConcurrency[0]
++		if concurrency < 0 {
++			return nil, fmt.Errorf("negative peer check concurrency")
++		}
++	}
+ 	ctx, cancel := context.WithCancel(ctx)
+ 	return &RtRefreshManager{
+ 		ctx:       ctx,
+@@ -83,8 +92,9 @@
+ 		refreshInterval:                    refreshInterval,
+ 		successfulOutboundQueryGracePeriod: successfulOutboundQueryGracePeriod,
+ 
+-		triggerRefresh: make(chan *triggerRefreshReq),
+-		refreshDoneCh:  refreshDoneCh,
++		triggerRefresh:       make(chan *triggerRefreshReq),
++		refreshDoneCh:        refreshDoneCh,
++		peerCheckConcurrency: concurrency,
+ 	}, nil
+ }
+ 
+@@ -139,15 +149,35 @@
+ 	var alive int64
+ 	var wg sync.WaitGroup
+ 	peers := r.rt.GetPeerInfos()
++	capacity := r.peerCheckConcurrency
++	if capacity == 0 {
++		capacity = max(1, len(peers))
++	}
++	slots := make(chan struct{}, capacity)
++	started := time.Now()
++	logger.Info("routing table liveness start", "routing_table", len(peers), "concurrency", capacity)
+ 	for _, ps := range peers {
+ 		if time.Since(ps.LastSuccessfulOutboundQueryAt) <= r.successfulOutboundQueryGracePeriod {
+ 			continue
+ 		}
+ 
++		// Acquire before starting the timeout: a locally queued healthy peer
++		// must not be evicted for time spent waiting for admission.
++		select {
++		case slots <- struct{}{}:
++		case <-ctx.Done():
++			wg.Wait()
++			return
++		}
+ 		peersChecked++
+ 		wg.Add(1)
+ 		go func(ps kbucket.PeerInfo) {
+ 			defer wg.Done()
++			defer func() { <-slots }()
++			protectTag := fmt.Sprintf("dht-liveness-%p", r)
++			cm := r.h.ConnManager()
++			cm.Protect(ps.Id, protectTag)
++			defer cm.Unprotect(ps.Id, protectTag)
+ 
+ 			livelinessCtx, cancel := context.WithTimeout(ctx, peerPingTimeout)
+ 			defer cancel()
+@@ -156,14 +186,20 @@
+ 			defer span.End()
+ 
+ 			if err := r.h.Connect(livelinessCtx, peer.AddrInfo{ID: ps.Id}); err != nil {
+-				logger.Debugw("evicting peer after failed connection", "peer", peerIdStr, "error", err)
++				if ctx.Err() != nil {
++					return
++				}
++				logger.Debug("evicting peer after failed connection", "peer", peerIdStr, "error", err)
+ 				span.RecordError(err)
+ 				r.rt.RemovePeer(ps.Id)
+ 				return
+ 			}
+ 
+ 			if err := r.refreshPingFnc(livelinessCtx, ps.Id); err != nil {
+-				logger.Debugw("evicting peer after failed ping", "peer", peerIdStr, "error", err)
++				if ctx.Err() != nil {
++					return
++				}
++				logger.Debug("evicting peer after failed ping", "peer", peerIdStr, "error", err)
+ 				span.RecordError(err)
+ 				r.rt.RemovePeer(ps.Id)
+ 				return
+@@ -173,6 +209,10 @@
+ 		}(ps)
+ 	}
+ 	wg.Wait()
++	if peersChecked > 0 {
++		logger.Info("routing table liveness complete", "checked", peersChecked,
++			"alive", alive, "concurrency", capacity, "elapsed_ms", time.Since(started).Milliseconds())
++	}
+ 
+ 	span.SetAttributes(attribute.Int("NumPeersChecked", peersChecked), attribute.Int("NumPeersSkipped", len(peers)-peersChecked), attribute.Int64("NumPeersAlive", alive))
+ }
+@@ -184,7 +224,7 @@
+ 	if r.enableAutoRefresh {
+ 		err := r.doRefresh(r.ctx, true)
+ 		if err != nil {
+-			logger.Warn("failed when refreshing routing table", err)
++			logger.Warn("failed when refreshing routing table", "error", err)
+ 		}
+ 		t := time.NewTicker(r.refreshInterval)
+ 		defer t.Stop()
+@@ -230,7 +270,7 @@
+ 			close(w)
+ 		}
+ 		if err != nil {
+-			logger.Warnw("failed when refreshing routing table", "error", err)
++			logger.Warn("failed when refreshing routing table", "error", err)
+ 		}
+ 
+ 		span.End()
+@@ -238,6 +278,10 @@
+ }
+ 
+ func (r *RtRefreshManager) doRefresh(ctx context.Context, forceRefresh bool) error {
++	started := time.Now()
++	defer func() {
++		logger.Info("routing table refresh complete", "routing_table", r.rt.Size(), "elapsed_ms", time.Since(started).Milliseconds())
++	}()
+ 	ctx, span := internal.StartSpan(ctx, "RefreshManager.doRefresh")
+ 	defer span.End()
+ 
+@@ -293,7 +337,7 @@
+ 
+ func (r *RtRefreshManager) refreshCplIfEligible(ctx context.Context, cpl uint, lastRefreshedAt time.Time) error {
+ 	if time.Since(lastRefreshedAt) <= r.refreshInterval {
+-		logger.Debugf("not running refresh for cpl %d as time since last refresh not above interval", cpl)
++		logger.Debug("not running refresh before interval", "cpl", cpl)
+ 		return nil
+ 	}
+ 
+@@ -311,8 +355,7 @@
+ 		return fmt.Errorf("failed to generated query key for cpl=%d, err=%s", cpl, err)
+ 	}
+ 
+-	logger.Infof("starting refreshing cpl %d with key %s (routing table size was %d)",
+-		cpl, loggableRawKeyString(key), r.rt.Size())
++	logger.Info("starting routing table bucket refresh", "cpl", cpl, "routing_table", r.rt.Size())
+ 
+ 	if err := r.runRefreshDHTQuery(ctx, key); err != nil {
+ 		span.SetStatus(codes.Error, err.Error())
+@@ -320,7 +363,7 @@
+ 	}
+ 
+ 	sz := r.rt.Size()
+-	logger.Infof("finished refreshing cpl %d, routing table size is now %d", cpl, sz)
++	logger.Info("finished routing table bucket refresh", "cpl", cpl, "routing_table", sz)
+ 	span.SetAttributes(attribute.Int("NewSize", sz))
+ 	return nil
+ }

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=P2PDesk
+NoDisplay=true
+MimeType=x-scheme-handler/p2pdesk;
+TryExec=p2pdesk
+Exec=p2pdesk %u
+Icon=p2pdesk
+Terminal=false
+Type=Application
+StartupNotify=false
+StartupWMClass=p2pdesk

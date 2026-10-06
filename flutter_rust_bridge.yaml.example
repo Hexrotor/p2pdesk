@@ -1,0 +1,38 @@
+# p2pdesk flutter_rust_bridge codegen config (frb 1.80.1).
+#
+# Copy to flutter_rust_bridge.yaml, replace every <P2PDESK_ROOT> with the
+# absolute path of this repository and <LLVM_ROOT> with the root of an LLVM
+# install (ffigen looks for bin\libclang.dll under it), then run from the
+# repository root:
+#   flutter_rust_bridge_codegen flutter_rust_bridge.yaml
+#
+# The generated files (src/bridge_generated.rs, flutter/lib/generated_bridge.dart)
+# are gitignored, so a fresh clone must run this codegen before any Android APK
+# build. Re-run it also after changing pub fn signatures in src/flutter_ffi.rs.
+rust_input:
+  - <P2PDESK_ROOT>/src/flutter_ffi.rs
+dart_output:
+  - <P2PDESK_ROOT>/flutter/lib/generated_bridge.dart
+rust_output:
+  - <P2PDESK_ROOT>/src/bridge_generated.rs
+rust_crate_dir:
+  - <P2PDESK_ROOT>
+class_name:
+  - Rustdesk
+dart_format_line_length: 80
+dart_enums_style: false
+skip_add_mod_to_lib: false
+llvm_path:
+  - <LLVM_ROOT>
+llvm_compiler_opts: ""
+manifest_path: <P2PDESK_ROOT>/Cargo.toml
+dart_root:
+  - <P2PDESK_ROOT>/flutter
+build_runner: false
+skip_deps_check: false
+wasm_enabled: false
+inline_rust: false
+bridge_in_method: true
+extra_headers: ""
+dart3: true
+keep_going: false

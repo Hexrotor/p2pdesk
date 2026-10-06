@@ -1,0 +1,6 @@
+# build artifacts (produced by the Rust build step into target/)
+p2pdesk_net.dll
+p2pdesk_net.h
+p2pdesk_net_check.h
+findpeer.exe
+*.exe

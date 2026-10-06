@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.hex.p2pdesk</id>
+  <developer id="com.hex">
+    <name>P2PDesk</name>
+  </developer>
+  <launchable type="desktop-id">com.hex.p2pdesk.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <name>P2PDesk</name>
+  <summary>Serverless peer-to-peer remote desktop</summary>
+  <description>
+    <p>
+      P2PDesk is a serverless remote desktop: the controller finds the target by
+      its libp2p peer id on a public DHT and connects directly. No account, no
+      self-hosted rendezvous server, and session data does not traverse a relay.
+    </p>
+    <ul>
+      <li> Direct peer-to-peer connection with the stock RustDesk handshake on top. </li>
+      <li> VP8 / VP9 / AV1 software codecs and H.264 / H.265 hardware codecs. </li>
+      <li> Self-hosting is optional: a custom DHT bootstrap node replaces the public network. </li>
+    </ul>
+    <p>
+      This is a fork of RustDesk 1.4.9 (AGPL-3.0) that replaces the hbbs/hbbr
+      servers with a go-libp2p module. The Linux packaging is inherited from
+      upstream and is not regularly tested by the maintainer.
+    </p>
+  </description>
+  <categories>
+    <category>Network</category>
+    <category>RemoteAccess</category>
+  </categories>
+  <branding>
+    <color type="primary" scheme_preference="light">#d9eaf8</color>
+    <color type="primary" scheme_preference="dark">#0160ee</color>
+  </branding>
+  <url type="homepage">https://github.com/Hexrotor/p2pdesk</url>
+  <url type="bugtracker">https://github.com/Hexrotor/p2pdesk/issues</url>
+  <url type="vcs-browser">https://github.com/Hexrotor/p2pdesk</url>
+  <url type="contribute">https://github.com/Hexrotor/p2pdesk/blob/main/docs/CONTRIBUTING.md</url>
+  <requires>
+    <display_length compare="ge">600</display_length>
+    <internet>always</internet>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+</component>

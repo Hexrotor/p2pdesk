@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: p2pdesk-net (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: p2pdesk-net
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: p2pdesk-net/go.mod
+          cache-dependency-path: p2pdesk-net/go.sum
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./... -count=1 -timeout 10m
+
+  scripts:
+    name: scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Byte-compile the packaging scripts
+        run: |
+          python -m py_compile \
+            scripts/package_windows.py \
+            scripts/av1-browser-corpus.py \
+            scripts/av1-sample-quality.py \
+            res/inline-sciter.py \
+            res/msi/preprocess.py
+      - name: Regenerate the embedded Sciter UI
+        run: python res/inline-sciter.py

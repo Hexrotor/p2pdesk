@@ -1,0 +1,27 @@
+#!/bin/bash
+
+set -e
+
+if [ "$1" = configure ]; then
+
+	INITSYS=$(ls -al /proc/1/exe | awk -F' ' '{print $NF}' | awk -F'/' '{print $NF}')
+	ln -f -s /usr/share/p2pdesk/p2pdesk /usr/bin/p2pdesk
+
+	if [ "systemd" == "$INITSYS" ]; then
+
+		if [ -e /etc/systemd/system/p2pdesk.service ]; then
+			rm /etc/systemd/system/p2pdesk.service /usr/lib/systemd/system/p2pdesk.service /usr/lib/systemd/user/p2pdesk.service >/dev/null  2>&1
+		fi
+		mkdir -p /usr/lib/systemd/system/
+		cp /usr/share/p2pdesk/files/systemd/p2pdesk.service /usr/lib/systemd/system/p2pdesk.service
+		# try fix error in Ubuntu 18.04
+		# Failed to reload p2pdesk.service: Unit p2pdesk.service is not loaded properly: Exec format error.
+		# /usr/lib/systemd/system/p2pdesk.service:10: Executable path is not absolute: pkill -f "p2pdesk --"
+		if [ -e /usr/bin/pkill ]; then
+			sed -i "s|pkill|/usr/bin/pkill|g" /usr/lib/systemd/system/p2pdesk.service
+		fi
+		systemctl daemon-reload
+		systemctl enable p2pdesk
+		systemctl start p2pdesk
+	fi
+fi

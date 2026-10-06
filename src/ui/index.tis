@@ -1,0 +1,1160 @@
+if (is_osx) view.windowBlurbehind = #light;
+stdout.println("current platform:", OS);
+stdout.println("is_xfce: ", is_xfce);
+
+// See default height in common.tis `msgbox()`.
+const msgbox_default_height = 180;
+const incoming_only_width = 180;
+
+const outgoing_only = handler.is_outgoing_only();
+const incoming_only = handler.is_incoming_only();
+const disable_installation = handler.is_disable_installation();
+const disable_account = handler.is_disable_account();
+const disable_settings = handler.is_disable_settings();
+const is_custom_client = handler.is_custom_client();
+const disable_ab = handler.is_disable_ab();
+const disable_change_permanent_password = handler.get_builtin_option("disable-change-permanent-password") == "Y";
+const disable_change_id = handler.get_builtin_option("disable-change-id") == "Y";
+const hide_stop_service = handler.get_builtin_option("hide-stop-service") == "Y";
+
+// html min-width, min-height not working on mac, below works for all
+if (incoming_only) {
+  view.windowMinSize = (scaleIt(incoming_only_width), scaleIt((handler.is_installed() || disable_installation) ? 300 : 390));
+} else {
+  view.windowMinSize = (scaleIt(560), scaleIt(300));
+}
+
+var app;
+var tmp = handler.get_connect_status();
+var connect_status = tmp[0];
+// p2pdesk: v[3] is the DHT routing table size; v[4] is the live
+// connection count, both shown inline.
+var dht_peers = tmp[3] || 0;
+var p2p_connected = tmp[4] || 0;
+var key_confirmed = tmp[1];
+var system_error = "";
+
+const default_option_lang = is_custom_client ? 'default' : '';
+const default_option_yes = is_custom_client ? 'Y' : '';
+const default_option_no = is_custom_client ? 'N' : '';
+const default_option_whitelist = is_custom_client ? ',' : '';
+const default_option_approve_mode = is_custom_client ? 'password-click' : '';
+
+const grey_text_style = "color:#888;";
+
+var svg_menu = <svg #menu viewBox="0 0 512 512">
+	<circle cx="256" cy="256" r="64"/>
+	<circle cx="256" cy="448" r="64"/>
+	<circle cx="256" cy="64" r="64"/>
+</svg>;
+var svg_copy = <svg viewBox="0 0 24 24" fill="currentColor">
+	<rect x="8" y="8" width="12" height="12" rx="2"/>
+	<path d="M4 16V4a2 2 0 0 1 2-2h12v2H6v12z"/>
+</svg>;
+var svg_qr = <svg viewBox="0 0 24 24" fill="currentColor">
+	<rect x="3" y="3" width="7" height="7" rx="1"/>
+	<rect x="14" y="3" width="7" height="7" rx="1"/>
+	<rect x="3" y="14" width="7" height="7" rx="1"/>
+	<rect x="14" y="14" width="3" height="3"/>
+	<rect x="17" y="17" width="3" height="3"/>
+	<rect x="17" y="20" width="3" height="1"/>
+	<rect x="20" y="17" width="1" height="3"/>
+	<rect x="14" y="20" width="3" height="1"/>
+	<rect x="20" y="14" width="1" height="3"/>
+</svg>;
+
+var my_id = handler.get_id();
+function get_id() {
+  my_id = handler.get_id();
+  return my_id;
+}
+
+function get_msgbox_width(width=500) {
+    if (incoming_only) {
+        var maxw = scaleIt(incoming_only_width);
+        if (width > maxw) width = maxw;
+    }
+    return width;
+}
+
+class ConnectStatus: Reactor.Component {
+    function render() {
+        return
+            <div .connect-status>
+                <span class={"connect-status-icon connect-status" + connect_status} />
+                {this.getConnectStatusStr()}
+            </div>;
+    }
+
+    function getConnectStatusStr() {
+        if (connect_status == -1) {
+            return translate('not_ready_status');
+        }
+        // p2pdesk: no server-connecting state -- show the DHT routing
+        // table size and the live connection count directly.
+        var n = dht_peers < 0 ? 0 : dht_peers;
+        return n + " " + translate('p2p_dht_peers')
+            + ", " + p2p_connected + " " + translate('p2p_connections');
+    }
+}
+
+function createNewConnect(id, type) {
+    id = id.replace(/\s/g, ""); // also strips trailing \r from pasted text
+    app.remote_id.value = formatId(id);
+    if (!id) return;
+    if (id == my_id) {
+        msgbox("custom-error", "Error", "You cannot connect to your own computer");
+        return;
+    }
+    handler.set_remote_id(id);
+    handler.new_remote(id, type, false);
+}
+
+class ShareRdp: Reactor.Component {
+    function render() {
+        var rdp_shared_string = translate("Enable RDP session sharing");
+        var cls = handler.is_share_rdp()  ? "selected" : "line-through";
+        return <li class={cls}><span>{svg_checkmark}</span>{rdp_shared_string}</li>;
+    }
+    
+    function onClick() {
+        handler.set_share_rdp(!handler.is_share_rdp());
+        this.update();
+    }
+}
+
+
+var myIdMenu;
+var audioInputMenu;
+class AudioInputs: Reactor.Component {
+    function this() {
+        audioInputMenu = this;
+    }
+
+    function render() {
+        if (!this.show) return <li />;
+        var inputs = handler.get_sound_inputs();
+        if (is_win) inputs = ["System Sound"].concat(inputs);
+        if (!inputs.length) return <li style="display:hidden" />;
+        var me = this;
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return <li>{translate('Audio Input')}
+            <menu #audio-input key={inputs.length}>
+                <li #enable-audio><span>{svg_checkmark}</span>{translate("Mute")}</li>
+                <div .separator />
+                {inputs.map(function(name) {
+                return <li id={name}><span>{svg_checkmark}</span>{translate(name)}</li>;
+                })}
+            </menu>
+        </li>;
+    }
+
+    function get_default() {
+        if (is_win) return "System Sound";
+        return "";
+    }
+
+    function get_value() {
+        return handler.get_option("audio-input") || this.get_default();
+    }
+
+    function toggleMenuState() {
+        var el = this.$(li#enable-audio);
+        var enabled = handler.get_option(el.id) != "N";
+        el.attributes.toggleClass("selected", !enabled);
+        var is_opt_fixed = handler.is_option_fixed("enable-audio");
+        if (disable_settings || is_opt_fixed) {
+            el.state.disabled = true;
+        }
+        var v = this.get_value();
+        for (var el in this.$$(menu#audio-input>li)) {
+            if (el.id == 'enable-audio') continue;
+            var selected = el.id == v;
+            el.attributes.toggleClass("selected", selected);
+        }
+    }
+
+    event click $(menu#audio-input>li) (_, me) {
+        if (me.state.disabled) return;
+        var v = me.id;
+        if (v == 'enable-audio') {
+            handler.set_option(v, handler.get_option(v) != 'N' ? 'N' : default_option_yes);
+        } else {
+          if (v == this.get_value()) return;
+          if (v == this.get_default()) v = "";
+          handler.set_option("audio-input", v);
+        }
+        this.toggleMenuState();
+    }
+};
+
+class Languages: Reactor.Component {
+    function render() {
+        var langs = JSON.parse(handler.get_langs());
+        var me = this;
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return <li>{translate('Language')}
+            <menu #languages key={langs.length}>
+                <li id="default"><span>{svg_checkmark}</span>Default</li>
+                <div .separator />
+                {langs.map(function(lang) {
+                return <li id={lang[0]}><span>{svg_checkmark}</span>{lang[1]}</li>;
+                })}
+            </menu>
+        </li>;
+    }
+
+
+    function toggleMenuState() {
+        var cur = handler.get_local_option("lang") || "default";
+        var is_opt_fixed = handler.is_option_fixed("lang");
+        for (var el in this.$$(menu#languages>li)) {
+            var selected = cur == el.id;
+            el.attributes.toggleClass("selected", selected);
+            if (is_opt_fixed) {
+                el.state.disabled = true;
+            }
+        }
+    }
+
+    event click $(menu#languages>li) (_, me) {
+        if (me.state.disabled) return;
+        var v = me.id;
+        if (v == "default") v = default_option_lang;
+        handler.set_local_option("lang", v);
+        app.update();
+        this.toggleMenuState();
+    }
+}
+
+var enhancementsMenu;
+class Enhancements: Reactor.Component {
+    function this() {
+        enhancementsMenu = this;
+    }
+
+    function render() {
+        var has_hwcodec = handler.has_hwcodec();
+        var has_vram = handler.has_vram();
+        var support_remove_wallpaper = handler.support_remove_wallpaper();
+        var me = this;
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return <li>{translate('Enhancements')}
+            <menu #enhancements-menu>
+                {(has_hwcodec || has_vram) ? <li #enable-hwcodec><span>{svg_checkmark}</span>{translate("Enable hardware codec")}</li> : ""}
+                <li #enable-abr><span>{svg_checkmark}</span>{translate("Adaptive bitrate")} (beta)</li>
+                <li #enable-av1-cq><span>{svg_checkmark}</span>AV1 CQ (beta)</li>
+                <li #screen-recording>{translate("Recording")}</li>
+                {support_remove_wallpaper ? <li #allow-remove-wallpaper><span>{svg_checkmark}</span>{translate("Remove wallpaper during incoming sessions")}</li> : ""}
+                <li #keep-awake-during-incoming-sessions><span>{svg_checkmark}</span>{translate("keep-awake-during-incoming-sessions-label")}</li>
+            </menu>
+        </li>;
+    }
+
+    function toggleMenuState() {
+        for (var el in $$(menu#enhancements-menu>li)) {
+            if (el.id && el.id.indexOf("enable-") == 0) {
+                // AV1 CQ is tri-state: "Y" forces CQ on, "N" forces it off and
+                // unset follows the session quality preset, so the tick only
+                // means "forced on" here.
+                var enabled = el.id == "enable-av1-cq"
+                    ? handler.get_option(el.id) == "Y"
+                    : handler.get_option(el.id) != "N";
+                el.attributes.toggleClass("selected", enabled);
+                var is_opt_fixed = handler.is_option_fixed(el.id);
+                if (is_opt_fixed) {
+                    el.state.disabled = true;
+                }
+            } else if (el.id && el.id.indexOf("allow-") == 0) {
+                var enabled = handler.get_option(el.id) == "Y";
+                el.attributes.toggleClass("selected", enabled);
+                var is_opt_fixed = handler.is_option_fixed(el.id);
+                if (is_opt_fixed) {
+                    el.state.disabled = true;
+                }
+            } else if (el.id == "keep-awake-during-incoming-sessions") {
+                var enabled = handler.get_option(el.id) != "N";
+                el.attributes.toggleClass("selected", enabled);
+                var is_opt_fixed = handler.is_option_fixed(el.id);
+                if (is_opt_fixed) {
+                    el.state.disabled = true;
+                }
+            }
+        }
+
+    }
+
+    event click $(menu#enhancements-menu>li) (_, me) {
+        if (me.state.disabled) return;
+        var v = me.id;
+        if (v.indexOf("enable-") == 0) {
+            var set_value = handler.get_option(v) != 'N' ? 'N' : default_option_yes;
+            if (v == "enable-av1-cq") {
+                // Cycle forced on -> forced off -> follow the preset.
+                var current = handler.get_option(v);
+                set_value = current == 'Y' ? 'N' : (current == 'N' ? '' : default_option_yes);
+            }
+            handler.set_option(v, set_value);
+            if (v == "enable-hwcodec" && set_value != 'N') {
+                handler.check_hwcodec();
+            }
+        } else if (v.indexOf("allow-") == 0) {
+            handler.set_option(v, handler.get_option(v) == 'Y' ? default_option_no : 'Y');
+        } else if (v == 'keep-awake-during-incoming-sessions') {
+            handler.set_option(v, handler.get_option(v) != 'N' ? 'N' : default_option_yes);
+        } else if (v == 'screen-recording') {
+            var show_root_dir = is_win && handler.is_installed();
+            var user_dir = handler.video_save_directory(false);
+            var root_dir = show_root_dir ? handler.video_save_directory(true) : "";
+            var ts0 = handler.get_option("enable-record-session") != 'N' ? { checked: true } : {};
+            var ts1 = handler.get_option("allow-auto-record-incoming") == 'Y' ? { checked: true } : {};
+            var ts2 = handler.get_local_option("allow-auto-record-outgoing") == 'Y' ? { checked: true } : {};
+            var is_opt_fixed_enable_record = handler.is_option_fixed("enable-record-session");
+            var is_opt_fixed_auto_incoming = handler.is_option_fixed("allow-auto-record-incoming");
+            var is_opt_fixed_auto_outgoing = handler.is_option_fixed("allow-auto-record-outgoing");
+            var is_opt_fixed_video_dir = handler.is_option_fixed("video-save-directory");
+            if (is_opt_fixed_enable_record) { ts0.disabled = true; ts0.style = grey_text_style; }
+            if (is_opt_fixed_auto_incoming) { ts1.disabled = true; ts1.style = grey_text_style; }
+            if (is_opt_fixed_auto_outgoing) { ts2.disabled = true; ts2.style = grey_text_style; }
+            msgbox("custom-recording", translate('Recording'),
+                <div .form>
+                    <div><button|checkbox(enable_record_session) {ts0} .wrap-text>{translate('Enable recording session')}</button></div>
+                    <div><button|checkbox(auto_record_incoming) {ts1} .wrap-text>{translate('Automatically record incoming sessions')}</button></div>
+                    <div><button|checkbox(auto_record_outgoing) {ts2} .wrap-text>{translate('Automatically record outgoing sessions')}</button></div>
+                    <div class={is_opt_fixed_video_dir ? "grey-text" : ""}>
+                        {show_root_dir ? <div style="word-wrap:break-word"><span>{translate("Incoming")}:&nbsp;&nbsp;</span><span>{root_dir}</span></div> : ""}
+                        <div style="word-wrap:break-word"><span>{translate(show_root_dir ? "Outgoing" : "Directory")}:&nbsp;&nbsp;</span><span #folderPath>{user_dir}</span></div>
+                        {is_opt_fixed_video_dir ? "" : <div> <button #select_directory .link>{translate('Change')}</button> </div>}
+                    </div>
+                </div>
+                , "", function(res=null) {
+                if (!res) return;
+                if (!is_opt_fixed_enable_record) handler.set_option("enable-record-session", res.enable_record_session ? default_option_yes : 'N');
+                if (!is_opt_fixed_auto_incoming) handler.set_option("allow-auto-record-incoming", res.auto_record_incoming ? 'Y' : default_option_no);
+                if (!is_opt_fixed_auto_outgoing) handler.set_local_option("allow-auto-record-outgoing", res.auto_record_outgoing ? 'Y' : default_option_no);
+                if (!is_opt_fixed_video_dir) handler.set_local_option("video-save-directory", $(#folderPath).text);
+            }, msgbox_default_height, get_msgbox_width());
+        }
+        this.toggleMenuState();
+    }
+}
+
+
+
+// Shared dialog functions
+
+function open_whitelist_dialog() {
+    var is_opt_fixed = handler.is_option_fixed("whitelist");
+    var v = handler.get_option("whitelist");
+    var old_value = v == default_option_whitelist ? '' : v.split(",").join("\n");
+    // p2pdesk: peer whitelist -- an allowlist of PeerIds, matched in
+    // server.rs against the libp2p peer id (the IP whitelist above only
+    // applies to non-p2p connections, which we no longer accept).
+    var is_peer_opt_fixed = handler.is_option_fixed("peer-whitelist");
+    var pv = handler.get_option("peer-whitelist");
+    var peer_old_value = pv ? pv.split(",").join("\n") : '';
+    var type_str = (is_opt_fixed || is_peer_opt_fixed) ? "custom-whitelist-nook" : "custom-whitelist";
+    var readonly_attr = is_opt_fixed ? " readonly=\"readonly\"" : "";
+    var grey_class = is_opt_fixed ? " class=\"grey-text\"" : "";
+    var peer_readonly_attr = is_peer_opt_fixed ? " readonly=\"readonly\"" : "";
+    var peer_grey_class = is_peer_opt_fixed ? " class=\"grey-text\"" : "";
+    msgbox(type_str, translate("Whitelisting"), "<div .form> \
+            <div" + grey_class + ">" + translate("whitelist_sep") + "</div> \
+            <textarea .outline-focus spellcheck=\"false\" name=\"text\" novalue=\"0.0.0.0\"" + readonly_attr + grey_class + " style=\"overflow: scroll-indicator; width:*; height: 120px; font-size: 1.2em; padding: 0.5em;\">" + old_value + "</textarea>\
+            <div" + peer_grey_class + ">" + translate("peer_whitelist_sep") + "</div> \
+            <textarea .outline-focus spellcheck=\"false\" name=\"peer-text\" novalue=\"12D3KooW\"" + peer_readonly_attr + peer_grey_class + " style=\"overflow: scroll-indicator; width:*; height: 120px; font-size: 1.2em; padding: 0.5em;\">" + peer_old_value + "</textarea>\
+            </div> \
+            ", "", function(res=null, show_progress) {
+                if (!res) return;
+                if (typeof show_progress === 'function') show_progress();
+                var value = (res.text || "").trim();
+                if (value) {
+                    var values = value.split(/[\s,;\n]+/g);
+                    for (var ip in values) {
+                        if (!ip.match(/^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)(\/([1-9]|[1-2][0-9]|3[0-2])){0,1}$/)
+                            && !ip.match(/^(((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*::((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*|((?:[0-9A-Fa-f]{1,4}))((?::[0-9A-Fa-f]{1,4})){7})(\/([1-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])){0,1}$/)) {
+                            if (typeof show_progress === 'function') show_progress(false, translate("Invalid IP") + ": " + ip);
+                            return;
+                        }
+                    }
+                    value = values.join("\n");
+                }
+                var peer_value = (res["peer-text"] || "").trim();
+                if (peer_value) {
+                    var peers = peer_value.split(/[\s,;\n]+/g);
+                    for (var pid in peers) {
+                        // libp2p PeerId: base58 (no 0/O/I/l), starts with "1"
+                        if (!pid.match(/^1[1-9A-HJ-NP-Za-km-z]{30,60}$/)) {
+                            if (typeof show_progress === 'function') show_progress(false, translate("Invalid PeerId") + ": " + pid);
+                            return;
+                        }
+                    }
+                    peer_value = peers.join("\n");
+                }
+                if (value == old_value && peer_value == peer_old_value) return;
+                if (!value) value = default_option_whitelist;
+                handler.set_option("whitelist", value.replace("\n", ","));
+                handler.set_option("peer-whitelist", peer_value.replace("\n", ","));
+                if (typeof show_progress === 'function') show_progress(-1);
+            }, 420, get_msgbox_width());
+}
+
+
+// p2pdesk: self-hosted network — bootstrap peers (one multiaddr per line,
+// copy the second output line of bootstrapd) and the DHT protocol prefix
+// every device in the network must share. Both empty = the public DHT.
+// The Go module does the authoritative parsing; this only catches obvious
+// typos before they reach it.
+function open_custom_network_dialog() {
+    var v = handler.get_option("custom-bootstrap-peers");
+    var old_value = v ? v.split(",").join("\n") : '';
+    var p = handler.get_option("custom-bootstrap-protocol");
+    var old_protocol = p ? p : '';
+    var lp = handler.get_option("p2p-listen-port");
+    var old_port = lp && lp.match(/^\d+$/) ? lp : '';
+    msgbox("custom-network", translate("Custom Network"), "<div .form> \
+            <div>" + translate("custom_network_peers_tip") + "</div> \
+            <textarea .outline-focus spellcheck=\"false\" name=\"text\" novalue=\"/ip4/1.2.3.4/tcp/28432/p2p/12D3KooW\" style=\"overflow: scroll-indicator; width:*; height: 120px; font-size: 1.2em; padding: 0.5em;\">" + old_value + "</textarea>\
+            <div>" + translate("custom_network_protocol_tip") + "</div> \
+            <input .outline-focus type=\"text\" name=\"protocol\" novalue=\"/p2pdesk\" value=\"" + old_protocol + "\" style=\"width:*; margin: 0.5em 0;\"/>\
+            <div>" + translate("custom_network_port_tip") + "</div> \
+            <input .outline-focus type=\"text\" name=\"port\" novalue=\"28431\" value=\"" + old_port + "\" style=\"width:*; margin: 0.5em 0;\"/>\
+            <div>" + translate("custom_network_restart_tip") + "</div> \
+            </div> \
+            ", "", function(res=null, show_progress) {
+                if (!res) return;
+                if (typeof show_progress === 'function') show_progress();
+                var value = (res.text || "").trim();
+                if (value) {
+                    // Drop empty segments so a trailing separator (or an
+                    // all-separator paste) is not misreported as invalid.
+                    var lines = value.split(/[\s,;\n]+/g).filter(function (x) { return x; });
+                    for (var ma in lines) {
+                        if (!ma.match(/^\/(ip4|ip6|dns|dnsaddr|dns4|dns6)\//)
+                            || !ma.match(/\/p2p\/1[1-9A-HJ-NP-Za-km-z]{30,60}$/)) {
+                            if (typeof show_progress === 'function') show_progress(false, translate("Invalid Multiaddr") + ": " + ma);
+                            return;
+                        }
+                    }
+                    value = lines.join("\n");
+                }
+                var raw_protocol = (res.protocol || "").trim().replace(/\s+/g, '');
+                var protocol = raw_protocol;
+                if (protocol && protocol.charAt(0) != '/') protocol = '/' + protocol;
+                protocol = protocol.replace(/\/+$/, '');
+                // Mirror the Go-side validator: a value it rejects kills
+                // node startup, so refuse it here instead of saving a
+                // poisoned config. Slash-only input normalizes to '' and
+                // would silently clear the setting (back to the public
+                // DHT), so reject that too.
+                if ((protocol == '' && raw_protocol != '')
+                    || protocol.indexOf('//') >= 0
+                    || protocol.indexOf('/kad') >= 0 || protocol.length > 128) {
+                    if (typeof show_progress === 'function') show_progress(false, translate("Invalid Protocol") + ": " + raw_protocol);
+                    return;
+                }
+                var port = (res.port || "").trim();
+                if (port && (!port.match(/^\d+$/) || parseInt(port, 10) < 1 || parseInt(port, 10) > 65535)) {
+                    if (typeof show_progress === 'function') show_progress(false, translate("Invalid Port") + ": " + port);
+                    return;
+                }
+                if (value == old_value && protocol == old_protocol && port == old_port) return;
+                handler.set_option("custom-bootstrap-peers", value.replace(/\n/g, ","));
+                handler.set_option("custom-bootstrap-protocol", protocol);
+                handler.set_option("p2p-listen-port", port);
+                if (typeof show_progress === 'function') show_progress(-1);
+            }, 420, get_msgbox_width());
+}
+
+function updateTheme() {
+    var root_element = self;
+    if (handler.get_option("allow-darktheme") == "Y") {
+        // enable dark theme
+        root_element.attributes.toggleClass("darktheme", true);
+    } else {
+        // disable dark theme
+        root_element.attributes.toggleClass("darktheme", false);
+    }
+}
+
+class MyIdMenu: Reactor.Component {
+    function this() {
+        myIdMenu = this;
+    }
+
+    function render() {
+        return <div #myid>
+            {this.renderPop()}
+            PeerId{svg_menu}
+        </div>;
+    }
+
+    function renderPop() {
+        return <popup>
+            <menu.context #config-options>
+                {!disable_settings && <li #enable-keyboard><span>{svg_checkmark}</span>{translate('Enable keyboard/mouse')}</li>}
+                {!disable_settings && <li #enable-clipboard><span>{svg_checkmark}</span>{translate('Enable clipboard')}</li>}
+                {!disable_settings && <li #enable-file-transfer><span>{svg_checkmark}</span>{translate('Enable file transfer')}</li>}
+                {!disable_settings && <li #enable-camera><span>{svg_checkmark}</span>{translate('Enable camera')}</li>}
+                {!disable_settings && <li #enable-terminal><span>{svg_checkmark}</span>{translate('Enable terminal')}</li>}
+                {!disable_settings && <li #enable-remote-restart><span>{svg_checkmark}</span>{translate('Enable remote restart')}</li>}
+                {!disable_settings && <li #enable-tunnel><span>{svg_checkmark}</span>{translate('Enable TCP tunneling')}</li>}
+                {!disable_settings && is_win ? <li #enable-block-input><span>{svg_checkmark}</span>{translate('Enable blocking user input')}</li> : ""}
+                {!disable_settings && (handler.get_supported_privacy_mode_impls() != '[]') && <li #enable-privacy-mode><span>{svg_checkmark}</span>{translate('Enable privacy mode')}</li>}
+                {!disable_settings && <li #enable-lan-discovery><span>{svg_checkmark}</span>{translate('Enable LAN discovery')}</li>}
+                <AudioInputs />
+                <Enhancements />
+                {!disable_settings && <li #allow-remote-config-modification><span>{svg_checkmark}</span>{translate('Enable remote configuration modification')}</li>}
+                {!disable_settings && <div .separator />}
+                {!disable_settings && <li #whitelist title={translate('whitelist_tip')}>{translate('Whitelisting')}</li>}
+                {!disable_settings && <li #custom-network title={translate('custom_network_tip')}>{translate('Custom Network')}</li>}
+                <div .separator />
+                {!disable_settings && !hide_stop_service && is_win && handler.is_installed() ? <li #service-toggle>{translate(handler.get_option("stop-service") == "Y" ? 'Start service' : 'Stop service')}</li> : ""}
+                {!disable_settings && is_win && handler.is_installed() ? <ShareRdp /> : ""}
+                {!disable_change_id && handler.is_ok_change_id() ? <div .separator /> : ""}
+                {!disable_change_id && handler.is_ok_change_id() ? <li #change-id>{translate('Reset Identity')}</li> : ""}
+                <div .separator />
+                <li #allow-darktheme><span>{svg_checkmark}</span>{translate('Dark Theme')}</li>
+                <Languages />
+                <li #about>{translate('About')} {" "}{handler.get_app_name()}</li>
+            </menu>
+        </popup>;
+    }
+
+    event click $(svg#menu) (_, me) {
+        this.showSettingMenu();
+    }
+
+    function showSettingMenu() {
+        audioInputMenu.update({ show: true });
+        this.toggleMenuState();
+        var menu = this.$(menu#config-options);
+        this.$(svg#menu).popup(menu);
+    }
+
+
+    function toggleMenuState() {
+        for (var el in $$(menu#config-options>li)) {
+            var id = el.id;
+            if (!id) continue;
+            var is_opt_fixed = handler.is_option_fixed(id);
+            if (id.indexOf("enable-") == 0) {
+                var enabled = handler.get_option(id) != "N";
+                el.attributes.toggleClass("selected", enabled);
+                el.attributes.toggleClass("line-through", !enabled);
+            } else if (id.indexOf("allow-") == 0) {
+                var enabled = handler.get_option(id) == "Y";
+                el.attributes.toggleClass("selected", enabled);
+                el.attributes.toggleClass("line-through", !enabled);
+            } else if (id == "whitelist") {
+                // whitelist should be clickable even when fixed (to view the content)
+                // The dialog will show readonly textarea and no OK button when fixed
+                continue;
+            }
+            if (is_opt_fixed) {
+                el.state.disabled = true;
+            }
+        }
+    }
+
+    function showAbout() {
+        var name = handler.get_app_name();
+        msgbox("custom-nocancel-nook-hasclose", translate("About") + " " + name, "<div style='line-height: 2em'> \
+            <div>Version: " + handler.get_version() + " \
+            <div>Fingerprint: " + handler.get_fingerprint() + " \
+	    <div style='background: #2c8cff; color: white; padding: 1em; margin-top: 1em;'>Copyright &copy; 2026 Purslane Tech Pte. Ltd.\
+            <br />P2PDesk is a modified version of RustDesk 1.4.9, released under the GNU Affero General Public License v3.0. Modified by Hexrotor in 2026. \
+            <br />" + handler.get_license() + " \
+            <p style='font-weight: bold'>" + translate("Slogan_tip") + "</p>\
+            </div>\
+        </div>", "", function(el) {
+            if (el && el.attributes) {
+                handler.open_url(el.attributes['url']);
+            };
+        }, 400, get_msgbox_width());
+    }
+
+    event click $(menu#config-options>li) (_, me) {
+        if (me.state.disabled) return;
+        if (me.id && me.id.indexOf("enable-") == 0) {
+            handler.set_option(me.id, handler.get_option(me.id) == "N" ? default_option_yes : "N");
+        }
+        if (me.id && me.id.indexOf("allow-") == 0) {
+            handler.set_option(me.id, handler.get_option(me.id) == "Y" ? default_option_no : "Y");
+        }
+        if (me.id == "whitelist") {
+            open_whitelist_dialog();
+        } else if (me.id == "service-toggle") {
+            // The service toggle lives in the settings menu as well as the
+            // tray, so a stopped service can be started back from the GUI
+            // (the tray disappears with the service). Flip the persisted
+            // option; set_option() on Windows runs sc stop/start.
+            handler.set_option("stop-service", handler.get_option("stop-service") == "Y" ? "" : "Y");
+        } else if (me.id == "custom-network") {
+            open_custom_network_dialog();
+        } else if (me.id == "change-id") {
+            msgbox("custom-id", translate("Reset Identity"), translate("reset_identity_tip") + "<br>" + translate("reset_identity_restart_tip"), "", function(res=null, show_progress) {
+                if (!res) return;
+                show_progress();
+                handler.change_id("");
+                function check_status() {
+                    var status = handler.get_async_job_status();
+                    if (status == " ") self.timer(0.1s, check_status);
+                    else {
+                        if (status) show_progress(false, translate(status));
+                        else show_progress(-1);
+                    }
+                }
+                check_status();
+                return " ";
+            }, msgbox_default_height, get_msgbox_width());
+        } else if (me.id == "allow-darktheme") {
+            updateTheme();
+        } else if (me.id == "about") {
+            this.showAbout()
+        }
+    }
+}
+
+
+class App: Reactor.Component
+{
+    function this() {
+        app = this;
+    }
+
+    // p2pdesk: the settings entry is always shown -- the original gates it
+    // on outgoing_only because installed builds reach Settings via the tray
+    // icon; uninstalled (portable) builds have no tray, so the main window
+    // was the only place and it was missing. (ASCII only: the sciter JSX
+    // parser breaks on non-ASCII inside {..} blocks.)
+    function render() {
+        var is_can_screen_recording = handler.is_can_screen_recording(false);
+        return
+            <div .app>
+                    <div .left-pane style={incoming_only ? "width:*" : ""}>
+                    <div>
+                        {is_custom_client && handler.get_builtin_option("hide-powered-by-me") != "Y" ? <div .link #powered-by style="opacity:0.5;font-size:0.8em;text-decoration:underline">{translate('powered_by_me')}</div> : ""}
+                        <div .title style="flow:horizontal; position:relative; height:1.6em; line-height:1.6em">
+                            <span>{translate('Your Desktop')}</span>
+                            <span .link #open-settings style="position:absolute; right:0; bottom:0; transform:scale(0.6); transform-origin:right bottom; opacity:0.85">{svg_menu}</span>
+                        </div>
+                        <div .lighter-text>{outgoing_only ? translate('outgoing_only_desk_tip') : translate('desk_tip')}</div>
+                        {outgoing_only ? <div style="position:absolute; left:-10000px; top:-10000px; width:0; height:0; overflow:hidden"><MyIdMenu /></div> : ""}
+                        {!outgoing_only && <div .your-desktop>
+                            <MyIdMenu />
+                            {key_confirmed ? <div .your-id-row>
+                                <span .your-id title={get_id()}>{shortPeerId(get_id())}</span>
+                                <span .id-icon-btn #copy-id title={translate('Copy PeerId')}>{svg_copy}</span>
+                                <span .id-icon-btn #show-qr title={translate('show_qr_tip')}>{svg_qr}</span>
+                            </div> : translate("Generating ...")}
+                        </div>}
+                        {!outgoing_only && <PasswordArea />}
+                    </div>
+                    {(!is_win || handler.is_installed() || disable_installation) ? "" : <InstallMe />}
+                    {is_can_screen_recording ? "": <CanScreenRecording />}
+                    {is_can_screen_recording && !handler.is_process_trusted(false) ? <TrustMe /> : ""}
+                    {is_can_screen_recording && handler.is_process_trusted(false) && handler.is_installed() && !handler.is_installed_daemon(false) ? <InstallDaemon /> : ""}
+                    {system_error ? <SystemError /> : ""}
+                    {!system_error && handler.is_login_wayland() && !handler.current_is_wayland() ? <FixWayland /> : ""}
+                    {!system_error && handler.current_is_wayland() ? <ModifyDefaultLogin /> : ""}
+                    {incoming_only ? <ConnectStatus @{this.connect_status} /> : ""}
+                </div>
+                {!incoming_only && <div .right-pane>
+                    <div .right-content>
+                        <div .card-connect>
+                            <div .title>{translate('Control Remote Desktop')}</div>
+                            <ID @{this.remote_id} />
+                            <div .right-buttons>
+                                <button .button .outline #file-transfer>{translate('Transfer file')}</button>
+                                <button .button #connect>{translate('Connect')}</button>
+                            </div>
+                        </div>
+                        <MultipleSessions @{this.multipleSessions} />
+                    </div>
+                    {!outgoing_only ? <ConnectStatus @{this.connect_status} /> : ""}
+                </div>}
+                <div #overlay style="position: absolute;size:*;background:black;opacity:0.5;display:none" />
+            </div>; 
+    }
+
+    event click $(button#connect) {
+        this.newRemote("connect");
+    }
+
+    event click $(button#file-transfer) {
+        this.newRemote("file-transfer");
+    }
+
+    event click $(#copy-id) (_, me) {
+        // Copy the full PeerId; the on-screen form is abbreviated.
+        handler.copy_text(get_id());
+    }
+
+    event click $(#show-qr) (_, me) {
+        this.showQrDialog();
+    }
+
+    function showQrDialog() {
+        // QR code of our own PeerId so the phone can scan it. Display-only
+        // dialog, so a single close button is enough.
+        var my_id = handler.get_id();
+        msgbox("custom-nocancel", translate("Show QR code"), "<div .form style=\"text-align:center;\"> \
+                <img src=\"" + handler.generate_2fa_img_src(my_id) + "\" style=\"width: 200px; height: 200px; display: block; margin: 0 auto;\"/> \
+                <div style=\"word-break: break-all; margin-top: 8px;\">" + my_id + "</div> \
+                </div>", "", function(res) {}, 300, get_msgbox_width());
+    }
+
+    function newRemote(type) {
+        createNewConnect(this.remote_id.value, type);
+    }
+}
+
+class InstallMe: Reactor.Component {
+    function render() {
+        return <div .install-me>
+            <span />
+            <div>{translate('install_tip')}</div>
+            <div><button #install-me .button>{translate('Install')}</button></div>
+        </div>;
+    }
+
+    event click $(#install-me) {
+        handler.goto_install();
+    }
+}
+
+
+
+class SystemError: Reactor.Component {
+    function render() {
+        return <div .install-me>
+            <div>{system_error}</div>
+        </div>;
+    }
+}
+
+class TrustMe: Reactor.Component {
+    function render() {
+        return <div .trust-me #trust-me-box>
+            <div>{translate('Permissions')}</div>
+            <div>{translate('config_acc')}</div>
+            <div #trust-me .link>{translate('Configure')}</div>
+            <div #help-me .link>{translate('Help')}</div>
+        </div>;
+    }
+
+    event click $(#trust-me) {
+        handler.is_process_trusted(true);
+        watch_trust();
+    }
+    
+    event click $(#help-me) {
+        handler.open_url(translate("doc_mac_permission"));
+    }
+}
+
+class CanScreenRecording: Reactor.Component {
+    function render() {
+        return <div .trust-me #screen-recording-box>
+            <div>{translate('Permissions')}</div>
+            <div>{translate('config_screen')}</div>
+            <div #screen-recording .link>{translate('Configure')}</div>
+            <div #help-me .link>{translate('Help')}</div>
+        </div>;
+    }
+
+    event click $(#screen-recording) {
+        handler.is_can_screen_recording(true);
+        watch_screen_recording();
+    }
+    
+    event click $(#help-me) {
+        handler.open_url(translate("doc_mac_permission"));
+    }
+}
+
+class InstallDaemon: Reactor.Component {
+    function render() {
+        return <div .install-me>
+            <span />
+            <div>{translate('install_daemon_tip')}</div>
+            <div #install-me.link>{translate('Install')}</div>
+        </div>;
+    }
+
+    event click $(#install-me) {
+        handler.is_installed_daemon(true);
+    }
+}
+
+class FixWayland: Reactor.Component {
+    function render() {
+        return <div .trust-me>
+            <div>{translate('Warning')}</div>
+            <div>{translate('Login screen using Wayland is not supported')}</div>
+            <div #help-me .link>{translate('Help')}</div>
+        </div>;
+    }
+
+    event click $(#help-me) {
+        handler.open_url(translate("doc_fix_wayland"));
+    }
+}
+
+class ModifyDefaultLogin: Reactor.Component {
+    function render() {
+        return <div .trust-me>
+            <div>{translate('Warning')}</div>
+            <div>{translate('wayland_experiment_tip')}</div>
+            <div #help-me .link>{translate('Help')}</div>
+        </div>;
+    }
+
+    event click $(#help-me) {
+        handler.open_url(translate("doc_fix_wayland"));
+    }
+}
+
+function watch_trust() {
+    // not use TrustMe::update, because it is buggy
+    var trusted = handler.is_process_trusted(false);
+    var el = $(div#trust-me-box);
+    if (el) {
+        el.style.set {
+            display: trusted ? "none" : "block",
+        };
+    }
+    if (trusted) {
+        app.update();
+        return;
+    }
+    self.timer(1s, watch_trust);
+}
+
+function watch_screen_recording() {
+    var trusted = handler.is_can_screen_recording(false);
+    var el = $(div#screen-recording-box);
+    if (el) {
+        el.style.set {
+            display: trusted ? "none" : "block",
+        };
+    }
+    if (trusted) {
+        app.update();
+        return;
+    }
+    self.timer(1s, watch_screen_recording);
+}
+
+class PasswordEyeArea : Reactor.Component {
+    render() {
+        var has_local_password = handler.is_local_permanent_password_set();
+        var value = has_local_password ? "************" : translate("Not set");
+        return
+            <div .eye-area style="width: *">
+                <input|text @{this.input} readonly value={value} />
+            </div>;
+    }
+}
+
+var passwordArea;
+class PasswordArea: Reactor.Component {
+    function this() {
+        passwordArea = this;
+    }
+
+    function render() {
+        var me = this;
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return
+        <div .your-desktop>
+            <div>{translate('Password')}</div>
+            <div .password style="flow:horizontal">
+                {this.renderPop()}
+                <PasswordEyeArea />
+                {!disable_settings && svg_edit}
+            </div>
+        </div>;
+    }
+
+    function renderPop() {
+        var has_local_password = handler.is_local_permanent_password_set();
+        return <popup><menu.context #edit-password-context>
+            {disable_change_permanent_password ? '' : <li #set-password>{translate('Set permanent password')}</li> }
+            {disable_change_permanent_password ? '' : <li #clear-password disabled={ has_local_password ? "false" : "true" }>{translate('Clear permanent password')}</li> }
+        </menu></popup>;
+    }
+
+    function toggleMenuState() {
+        for (var el in this.$$(menu#edit-password-context>li)) {
+            if (el.id == "clear-password") {
+                var has_local_password = handler.is_local_permanent_password_set();
+                el.state.disabled = !has_local_password;
+            }
+        }
+    }
+
+    event click $(svg#edit) (_, me) {
+        var menu = $(menu#edit-password-context);
+        me.popup(menu);
+    }
+
+    event click $(li#set-password) {
+        var me = this;
+        var has_local_password = handler.is_local_permanent_password_set();
+        var permanent_password_set = handler.is_permanent_password_set();
+        var password_hidden_tip = translate('password-hidden-tip');
+        var preset_password_tip = translate('preset-password-in-use-tip');
+        var password_tip = "";
+        if (has_local_password) {
+            password_tip = "<div style='margin-top:0.5em; color:#e5a43a;'><span style='font-weight:bold;'>[!]</span> " + password_hidden_tip + "</div>";
+        } else if (permanent_password_set) {
+            password_tip = "<div style='margin-top:0.5em; color:#e5a43a;'><span style='font-weight:bold;'>[!]</span> " + preset_password_tip + "</div>";
+        }
+        msgbox("custom-password", translate("Set Password"), "<div .form .set-password> \
+            <div><span>" + translate('Password') + ":</span><input|password(password) .outline-focus /></div> \
+            <div><span>" + translate('Confirmation') + ":</span><input|password(confirmation) /></div> \
+            " + password_tip + " \
+        </div> \
+        ", "", function(res=null) {
+            if (!res) return;
+            var p0 = (res.password || "").trim();
+            var p1 = (res.confirmation || "").trim();
+            if (p0.length == 0 && p1.length == 0) {
+                return " ";
+            }
+            if (p0.length < 6 && p0.length != 0) {
+                return translate("Too short, at least 6 characters.");
+            }
+            if (p0 != p1) {
+                return translate("The confirmation is not identical.");
+            }
+            handler.set_permanent_password(p0);
+            me.update();
+        }, msgbox_default_height, get_msgbox_width());
+        self.timer(30ms, function() {
+            updateSetPasswordSubmitState();
+        });
+    }
+
+    event click $(li#clear-password) {
+        if (this.$(li#clear-password).state.disabled) return;
+        handler.set_permanent_password("");
+        this.update();
+    }
+
+
+}
+
+
+function updateSetPasswordSubmitState() {
+    var dialog = $(#msgbox);
+    if (!dialog) return;
+    var password = dialog.$(input[name='password']);
+    var confirmation = dialog.$(input[name='confirmation']);
+    var submit = dialog.$(button#submit);
+    if (!password || !confirmation || !submit) return;
+    var can_submit = (password.value || "").trim().length > 0 ||
+        (confirmation.value || "").trim().length > 0;
+    submit.state.disabled = !can_submit;
+}
+
+class ID: Reactor.Component {
+    function render() {
+        return <input type="text" #remote_id .outline-focus novalue={translate("Enter Remote ID")}
+        value={formatId(handler.get_remote_id())} />;
+    }
+
+    // https://github.com/c-smile/sciter-sdk/blob/master/doc/content/sciter/Event.htm
+    event change {
+        var fid = formatId(this.value);
+        var d = this.value.length - (this.old_value || "").length;
+        this.old_value = this.value;
+        var start = this.xcall(#selectionStart) || 0;
+        var end = this.xcall(#selectionEnd);
+        if (fid == this.value || d <= 0 || start != end) {
+            return;
+        }
+        // fix Caret position
+        this.value = fid;
+        var text_after_caret = this.old_value.substr(start);
+        var n = fid.length - formatId(text_after_caret).length;
+        this.xcall(#setSelection, n, n);
+    }
+}
+
+event keydown (evt) {
+    if (view.focus && view.focus.id != 'remote_id') {
+        return;
+    }
+    if (!evt.shortcutKey) {
+        if (isEnterKey(evt)) {
+            var el = $(button#connect);
+            view.focus = el;
+            el.sendEvent("click");
+            // simulate button click effect, windows does not have this issue
+            el.attributes.toggleClass("active", true);
+            self.timer(0.3s, function() {
+                el.attributes.toggleClass("active", false);
+            });
+        }
+    }
+}
+
+event keyup $(#msgbox input[name='password']) {
+    updateSetPasswordSubmitState();
+}
+
+event keyup $(#msgbox input[name='confirmation']) {
+    updateSetPasswordSubmitState();
+}
+
+event change $(#msgbox input[name='password']) {
+    updateSetPasswordSubmitState();
+}
+
+event change $(#msgbox input[name='confirmation']) {
+    updateSetPasswordSubmitState();
+}
+
+$(body).content(<div style="size:*"><App /><div #msgbox /></div>);
+
+event click $(#powered-by) {
+    handler.open_url("https://rustdesk.com");
+}
+
+event click $(#open-settings) (_, me) {
+    showSettings();
+}
+
+// Event handlers for outgoing_only mode (when menu items are in main UI, not in MyIdMenu)
+
+event click $(li#whitelist) (_, me) {
+    if (!outgoing_only) return;
+    open_whitelist_dialog();
+}
+
+
+
+function self.closing() {
+    var (x, y, w, h) = view.box(#rectw, #border, #screen);
+    handler.closing(x, y, w, h);
+    return true;
+}
+
+function self.ready() {
+    var r = handler.get_size();
+    if (isReasonableSize(r) && r[2] > 0) {
+        var (sx, sy, sw, sh) = view.screenBox(#workarea, #rectw);
+        if (r[2] >= sw && r[3] >= sh) {
+            self.timer(1ms, function() { view.windowState = View.WINDOW_MAXIMIZED; });
+        } else {
+            view.move(r[0], r[1], incoming_only ? scaleIt(incoming_only_width) : r[2], r[3]);
+        }
+    } else {
+        centerize(scaleIt(incoming_only ? incoming_only_width : 800), scaleIt(incoming_only ? 390 : 600));
+    }
+    if (!handler.get_remote_id()) {
+        view.focus = $(#remote_id);
+    }
+    updateTheme();
+}
+
+function showAbout() {
+    myIdMenu.showAbout();
+}
+
+function showSettings() {
+    if ($(#overlay).style#display == 'block') return;
+    var menu = myIdMenu.$(menu#config-options);
+    var anchor = $(#open-settings);
+    if (!anchor) anchor = myIdMenu.$(svg#menu);
+    // show immediately at button, then update menu state asynchronously
+    anchor.popup(menu);
+    self.timer(1ms, function() {
+        audioInputMenu.update({ show: true });
+        myIdMenu.toggleMenuState();
+    });
+}
+
+function checkConnectStatus() {
+    handler.check_mouse_time(); // trigger connection status updater
+    self.timer(1s, function() {
+        tmp = handler.get_connect_status();
+        // `|| 0` on the reads keeps a legacy 4-element array (old exe with
+        // a new module) from re-rendering every second on undefined.
+        if ((tmp[3] || 0) != dht_peers || (tmp[4] || 0) != p2p_connected) {
+            dht_peers = tmp[3] || 0;
+            p2p_connected = tmp[4] || 0;
+            app.connect_status.update();
+        }
+        if (tmp[0] != connect_status) {
+            connect_status = tmp[0];
+            app.connect_status.update();
+            myIdMenu.update();
+        }
+        if (tmp[1] != key_confirmed) {
+            key_confirmed = tmp[1];
+            app.update();
+        }
+        if (tmp[2] && tmp[2] != my_id) {
+            stdout.println("id updated");
+            app.update();
+        }
+        tmp = handler.get_error();
+        if (system_error != tmp) {
+            system_error = tmp;
+            app.update();
+        }
+        // no unconditional app.update() here — it rebuilds the whole tree every
+        // second and closes the settings popup while it is open (p2pdesk).
+        check_if_overlay();
+        checkConnectStatus();
+    });
+}
+                                 
+var enter = false;               
+function self.onMouse(evt) {     
+    switch(evt.type) {           
+    case Event.MOUSE_ENTER:    
+        enter = true;
+        check_if_overlay();
+        break;
+    case Event.MOUSE_LEAVE:
+        $(#overlay).style#display = 'none';
+        enter = false;
+        break;
+    }
+}
+
+function check_if_overlay() {
+    var enabled;
+    var is_enabled_by_control_permissions = handler.is_remote_modify_enabled_by_control_permissions();
+    if (is_enabled_by_control_permissions == "true") {
+        enabled = true;
+    } else if (is_enabled_by_control_permissions == "false") {
+        enabled = false;
+    } else {
+        enabled = handler.get_option('allow-remote-config-modification') == 'Y';
+    }
+    if (!enabled) {
+        var time0 = getTime();
+        handler.check_mouse_time();
+        self.timer(120ms, function() {
+            if (!enter) return;
+            var d = time0 - handler.get_mouse_time();
+            if (d < 120) $(#overlay).style#display = 'block';
+        });
+    }
+}
+
+checkConnectStatus();
+
+
+
+
+
+
+
+

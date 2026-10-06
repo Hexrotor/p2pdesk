@@ -1,0 +1,47 @@
+# arg 1:  the new package version
+#pre_install() {
+#}
+
+# arg 1:  the new package version
+post_install() {
+	# do something here
+	cp /usr/share/p2pdesk/files/p2pdesk.service /etc/systemd/system/p2pdesk.service
+	cp /usr/share/p2pdesk/files/p2pdesk.desktop /usr/share/applications/
+	cp /usr/share/p2pdesk/files/p2pdesk-link.desktop /usr/share/applications/
+	systemctl daemon-reload
+	systemctl enable p2pdesk
+	systemctl start p2pdesk
+	update-desktop-database
+}
+
+# arg 1:  the new package version
+# arg 2:  the old package version
+pre_upgrade() {
+    systemctl stop p2pdesk || true
+}
+
+# arg 1:  the new package version
+# arg 2:  the old package version
+post_upgrade() {
+	cp /usr/share/p2pdesk/files/p2pdesk.service /etc/systemd/system/p2pdesk.service
+	cp /usr/share/p2pdesk/files/p2pdesk.desktop /usr/share/applications/
+	cp /usr/share/p2pdesk/files/p2pdesk-link.desktop /usr/share/applications/
+	systemctl daemon-reload
+	systemctl enable p2pdesk
+	systemctl start p2pdesk
+	update-desktop-database
+}
+
+# arg 1:  the old package version
+pre_remove() {
+	systemctl stop p2pdesk || true
+	systemctl disable p2pdesk || true
+	rm /etc/systemd/system/p2pdesk.service || true
+}
+
+# arg 1:  the old package version
+post_remove() {
+	rm /usr/share/applications/p2pdesk.desktop || true
+	rm /usr/share/applications/p2pdesk-link.desktop || true
+	update-desktop-database
+}

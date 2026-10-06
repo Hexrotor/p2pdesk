@@ -1,0 +1,79 @@
+/build
+/target
+/dist
+.vscode
+.idea
+.DS_Store
+.env
+libsciter-gtk.so
+src/ui/inline.rs
+extractor
+__pycache__
+src/version.rs
+*dmg
+*exe
+*tgz
+cert.pfx
+*.bak
+*png
+*svg
+*jpg
+sciter.dll
+**pdb
+src/bridge_generated.rs
+src/bridge_generated.io.rs
+*deb
+rustdesk
+*.cache
+# appimage
+appimage/AppDir
+appimage/*.AppImage
+appimage/appimage-build
+appimage/*.xz
+# flutter
+flutter/linux/build/**
+flutter/linux/cmake-build-debug/**
+# flatpak
+flatpak/.flatpak-builder/**
+flatpak/ccache/**
+flatpak/.flatpak-builder/build/**
+flatpak/.flatpak-builder/shared-modules/**
+flatpak/.flatpak-builder/shared-modules/*.tar.xz
+flatpak/.flatpak-builder/debian-binary
+flatpak/build/**
+flatpak/repo/**
+flatpak/*.flatpak
+# bridge file
+lib/generated_bridge.dart
+# vscode devcontainer
+.gitconfig
+.vscode-server/
+.ssh
+.devcontainer/.*
+# build cache in examples
+examples/**/target/
+# ===
+vcpkg_installed
+flutter/lib/generated_plugin_registrant.dart
+libsciter.dylib
+flutter/web/
+# p2pdesk-net Go build output
+p2pdesk-net/build/
+# Android c-shared output (built inside p2pdesk-net/)
+p2pdesk-net/libp2pdesk_net.so
+p2pdesk-net/libp2pdesk_net.h
+p2pdesk-net/bootstrapd
+p2pdesk-net/bootstrapd-linux-*
+# generated per-machine (holds absolute GOROOT + repo paths)
+p2pdesk-net/android-overlay/overlay.json
+
+# flutter android build output
+flutter/android/build/
+
+# local scratch space
+.tmp/
+# runtime logs
+logs/
+# local AI-assistant stubs (AGENTS.md is the tracked contributor guide)
+/CLAUDE.md
+/GEMINI.md
