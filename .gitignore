@@ -65,7 +65,7 @@ p2pdesk-net/libp2pdesk_net.h
 p2pdesk-net/bootstrapd
 p2pdesk-net/bootstrapd-linux-*
 # generated per-machine (holds absolute GOROOT + repo paths)
-p2pdesk-net/android-overlay/overlay.json
+p2pdesk-net/_android-overlay/overlay.json
 
 # flutter android build output
 flutter/android/build/

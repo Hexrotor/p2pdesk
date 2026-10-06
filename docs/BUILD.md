@@ -94,12 +94,12 @@ goroot = subprocess.check_output(['go','env','GOROOT']).decode('utf-8').strip()
 src = os.path.join(goroot, 'src', 'syscall', 'netlink_linux.go')
 src_text = open(src, encoding='utf-8').read()
 assert '\tif err := Bind(s, sa); err != nil {\n' in src_text, \
-    'unexpected syscall/netlink_linux.go layout: re-port android-overlay/netlink_linux.go for this Go version'
-dst = os.path.abspath('android-overlay/netlink_linux.go')
-json.dump({'Replace': {src: dst}}, open('android-overlay/overlay.json','w', encoding='utf-8'), indent=2)
+    'unexpected syscall/netlink_linux.go layout: re-port _android-overlay/netlink_linux.go for this Go version'
+dst = os.path.abspath('_android-overlay/netlink_linux.go')
+json.dump({'Replace': {src: dst}}, open('_android-overlay/overlay.json','w', encoding='utf-8'), indent=2)
 "
 go build -trimpath -buildmode=c-shared -ldflags='-s -w -checklinkname=0' \
-  -overlay android-overlay/overlay.json -o libp2pdesk_net.so .
+  -overlay _android-overlay/overlay.json -o libp2pdesk_net.so .
 ```
 
 The Android `.so` needs `-checklinkname=0`: the gVisor `wlynxg/anet` dependency reaches into
@@ -107,12 +107,14 @@ The Android `.so` needs `-checklinkname=0`: the gVisor `wlynxg/anet` dependency 
 
 The `-overlay` patches one stdlib file: Android 11+ SELinux denies untrusted apps the
 netlink socket bind, so every `net.InterfaceAddrs` call fails and libp2p announces
-loopback-only addresses. `android-overlay/netlink_linux.go` is a copy of the Go stdlib file
+loopback-only addresses. `_android-overlay/netlink_linux.go` is a copy of the Go stdlib file
 with the bind removed (kernel auto-assigns the port id on first send; anet uses the same
 approach). After a Go toolchain upgrade, regenerate the copy from the new GOROOT file
-(`cp $(go env GOROOT)/src/syscall/netlink_linux.go android-overlay/`), re-remove the
+(`cp $(go env GOROOT)/src/syscall/netlink_linux.go _android-overlay/`), re-remove the
 `Bind(s, sa)` call, and keep the header comment; the python assert above fails loudly
-until the copy matches the installed toolchain.
+until the copy matches the installed toolchain. The leading underscore keeps the Go
+toolchain from treating the directory as a package, so `go vet ./...`, `go build ./...`
+and `go test ./...` never compile the stdlib copy.
 
 The Android `.so` goes to `flutter/android/app/src/main/jniLibs/arm64-v8a/libp2pdesk_net.so`;
 the final APK's `lib/arm64-v8a/` must contain both `librustdesk.so` and `libp2pdesk_net.so`.
