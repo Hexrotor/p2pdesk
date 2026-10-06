@@ -29,6 +29,8 @@ type fakeStunServer struct {
 	respondPort bool // answer change-port probes from the alternate address
 	respondIP   bool // answer change-ip probes from the alternate address
 	echoSource  bool // map the request source back (open internet simulation)
+	firstSrc    int  // first source port seen from the client socket
+	sawSrc      bool // set with firstSrc; easy modes move the mapping after it
 	done        chan struct{}
 }
 
@@ -80,24 +82,34 @@ func (s *fakeStunServer) close() {
 // allocMapping returns the mapped port for a request coming from srcPort.
 // The policies model the classification inputs:
 //   - fixed: cone (same mapping regardless of source or server)
-//   - easy-inc: endpoint-dependent, small cross-server spread (10), the
-//     extra-bind diff equals the OS port delta δ, so the grade stays
-//     easy-inc for any δ in [1,99] — no flakiness from ephemeral allocation
-//   - easy-dec: same shape, shrinking allocation
+//   - easy-inc: endpoint-dependent, the mapping moves by a small clamped
+//     step (1..99) in a fixed direction for every source beyond the first,
+//     with a cross-server spread of 10. The clamp is what makes the test
+//     deterministic: the OS ephemeral-port delta between the probe socket
+//     and the extra-bind socket is not small on every host (a busy CI
+//     runner can jump or wrap the whole range), while the classifier's
+//     easy window is (0,100)
+//   - easy-dec: same shape, opposite direction
 //   - hard: chaotic hash (cross-server spread far beyond the threshold)
 func (s *fakeStunServer) allocMapping(srcPort int) int {
 	switch s.step {
 	case 0:
 		return s.fixed
-	case 1:
-		// srcPort ≥ 49152 → 40000+srcPort ∈ [89152,105535], always exactly
-		// one mod-65535 wrap; the +10 id shift keeps the cross-server spread
-		// at 10 while the extra-bind diff stays exactly δ.
-		return (40000+srcPort-10*s.id)%65535 + 1
-	case -1:
-		// 40000-srcPort ∈ [-25535,-9152], always exactly one negative wrap;
-		// same invariants as the inc case, shrinking with srcPort.
-		return ((40000-srcPort+10*s.id)%65535+65535)%65535 + 1
+	case 1, -1:
+		if !s.sawSrc {
+			s.sawSrc, s.firstSrc = true, srcPort
+		}
+		d := srcPort - s.firstSrc
+		if d < 0 {
+			d = -d
+		}
+		if d > 99 {
+			d = 99
+		}
+		// The id shift stays opposite to the step so server 0 owns the
+		// extreme the extra-bind probe is compared against (max for inc,
+		// min for dec).
+		return 40000 + s.step*(d-10*s.id)
 	default:
 		h := uint64(srcPort)*2654435761 + uint64(s.id)*104729
 		return int((h>>16)&0xFFFF)%65535 + 1
@@ -189,13 +201,13 @@ func (s *fakeStunServer) serve() {
 			}
 		}
 		echo := s.echoSource
-		s.mu.Unlock()
-		if drop {
-			continue
-		}
 		mapped := &net.UDPAddr{IP: s.mappedIP, Port: s.allocMapping(from.Port)}
 		if echo {
 			mapped = from
+		}
+		s.mu.Unlock()
+		if drop {
+			continue
 		}
 		resp := buildStunResponse(tid, mapped, changedAdvert)
 		_, _ = respFrom.WriteToUDP(resp, from)
